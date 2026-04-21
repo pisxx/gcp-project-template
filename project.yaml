@@ -1,0 +1,10 @@
+project:
+  # Human-friendly name. Used to derive project_id by the workflow.
+  name: "example-lab"
+
+users:
+  owners:
+    - "dev1@company.com"
+  editors: []
+  viewers: []
+

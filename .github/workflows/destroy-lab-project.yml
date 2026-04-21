@@ -1,0 +1,74 @@
+name: Destroy Lab Project
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+
+    env:
+      ALLOWED_EMAIL_DOMAIN: pslawek-wiski-lab.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auth to Google Cloud (OIDC)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install yq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yq
+
+      - name: Read project.yaml
+        id: cfg
+        run: |
+          PROJECT_NAME="$(yq -r '.project.name' project.yaml)"
+          if [ -z "${PROJECT_NAME}" ] || [ "${PROJECT_NAME}" = "null" ]; then
+            echo "project.yaml missing .project.name"
+            exit 1
+          fi
+
+          USERS="$(yq -r '.users.owners[]?, .users.editors[]?, .users.viewers[]?' project.yaml | sed '/^null$/d' || true)"
+          if [ -n "${USERS}" ]; then
+            while IFS= read -r EMAIL; do
+              if [ -z "${EMAIL}" ]; then
+                continue
+              fi
+              case "${EMAIL}" in
+                *@${ALLOWED_EMAIL_DOMAIN}) ;;
+                *)
+                  echo "Invalid user email domain: ${EMAIL} (expected *@${ALLOWED_EMAIL_DOMAIN})"
+                  exit 1
+                  ;;
+              esac
+            done <<< "${USERS}"
+          fi
+
+          SAFE_NAME="$(echo "${PROJECT_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//')"
+          if [ -z "${SAFE_NAME}" ]; then
+            echo "project.yaml .project.name produced empty SAFE_NAME"
+            exit 1
+          fi
+
+          REPO_HASH="$(echo "${GITHUB_REPOSITORY}" | shasum -a 256 | cut -c1-8)"
+          PROJECT_ID="lab-${SAFE_NAME}-${REPO_HASH}"
+
+          echo "project_id=${PROJECT_ID}" >> "${GITHUB_OUTPUT}"
+
+      - name: Delete project
+        run: |
+          gcloud projects delete "${{ steps.cfg.outputs.project_id }}" --quiet
+
